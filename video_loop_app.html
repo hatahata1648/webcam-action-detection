@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ウェブカメラ アクション検出アプリ</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.0.0/dist/pose-detection.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+        
+        .container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            cursor: pointer;
+        }
+        
+        .fullscreen-hint {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 1000;
+            font-size: 18px;
+            display: none;
+        }
+        
+        .video-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+        
+        #webcam {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+        
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            pointer-events: none;
+            opacity: 0.8;
+        }
+        
+        .action-video {
+            position: absolute;
+            width: 200px;
+            height: 150px;
+            border-radius: 10px;
+            opacity: 0.9;
+            pointer-events: none;
+            z-index: 100;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+        }
+        
+        .debug-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 500;
+        }
+        
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="container">
+        <div class="fullscreen-hint" id="fullscreenHint">
+            画面をクリックして全画面表示にしてください
+        </div>
+        <div class="video-container" id="videoContainer">
+            <video id="webcam" autoplay muted playsinline>
+                お使いのブラウザはwebcamをサポートしていません。
+            </video>
+            <video id="overlay" loop muted playsinline>
+                <source src="video.mp4" type="video/mp4">
+            </video>
+            <canvas id="poseCanvas"></canvas>
+        </div>
+        <div class="debug-info" id="debugInfo">
+            AI読み込み中...
+        </div>
+    </div>
+
+    <script>
+        let webcamStream = null;
+        let isFullscreen = false;
+        let poseDetector = null;
+        let animationId = null;
+        let actionVideos = [];
+        let lastActionTime = 0;
+        const ACTION_COOLDOWN = 2000; // 2秒のクールダウン
+        
+        const webcamVideo = document.getElementById('webcam');
+        const overlayVideo = document.getElementById('overlay');
+        const container = document.getElementById('container');
+        const fullscreenHint = document.getElementById('fullscreenHint');
+        const poseCanvas = document.getElementById('poseCanvas');
+        const debugInfo = document.getElementById('debugInfo');
+        const ctx = poseCanvas.getContext('2d');
+
+        // ページ読み込み時に初期化
+        window.addEventListener('load', async () => {
+            await initializePoseDetection();
+            await startWebcam();
+            startPoseDetection();
+            
+            setTimeout(() => {
+                if (!isFullscreen) {
+                    fullscreenHint.style.display = 'block';
+                }
+            }, 2000);
+        });
+
+        // コンテナクリックでフルスクリーン
+        container.addEventListener('click', () => {
+            if (!isFullscreen) {
+                enterFullscreen();
+            }
+        });
+
+        async function initializePoseDetection() {
+            try {
+                debugInfo.textContent = 'AI モデル読み込み中...';
+                
+                // BlazePoseモデルを読み込み
+                const detectorConfig = {
+                    runtime: 'tfjs',
+                    enableSmoothing: true,
+                    modelType: 'lite'
+                };
+                
+                poseDetector = await poseDetection.createDetector(
+                    poseDetection.SupportedModels.BlazePose, 
+                    detectorConfig
+                );
+                
+                debugInfo.textContent = 'AI モデル読み込み完了';
+            } catch (error) {
+                console.error('ポーズ検出の初期化に失敗:', error);
+                debugInfo.textContent = 'AI モデル読み込み失敗';
+            }
+        }
+
+        async function startWebcam() {
+            try {
+                webcamStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 1920, height: 1080 },
+                    audio: false
+                });
+                
+                webcamVideo.srcObject = webcamStream;
+                
+                // キャンバスサイズを調整
+                webcamVideo.addEventListener('loadedmetadata', () => {
+                    poseCanvas.width = webcamVideo.videoWidth;
+                    poseCanvas.height = webcamVideo.videoHeight;
+                });
+                
+                // オーバーレイ動画を読み込み・再生
+                overlayVideo.load();
+                overlayVideo.play().catch(error => {
+                    console.log('オーバーレイ動画の自動再生に失敗:', error);
+                });
+                
+            } catch (error) {
+                console.error('ウェブカメラの開始に失敗:', error);
+            }
+        }
+
+        async function startPoseDetection() {
+            if (!poseDetector) return;
+            
+            const detectPose = async () => {
+                if (webcamVideo.readyState === 4) {
+                    try {
+                        const poses = await poseDetector.estimatePoses(webcamVideo);
+                        
+                        // キャンバスをクリア
+                        ctx.clearRect(0, 0, poseCanvas.width, poseCanvas.height);
+                        
+                        if (poses.length > 0) {
+                            const pose = poses[0];
+                            
+                            // デバッグ情報を更新
+                            debugInfo.textContent = `人物検出中 (信頼度: ${Math.round(pose.score * 100)}%)`;
+                            
+                            // ポーズを描画
+                            drawPose(pose);
+                            
+                            // アクションを検出
+                            checkForActions(pose);
+                        } else {
+                            debugInfo.textContent = '人物を検出中...';
+                        }
+                    } catch (error) {
+                        console.error('ポーズ検出エラー:', error);
+                    }
+                }
+                
+                animationId = requestAnimationFrame(detectPose);
+            };
+            
+            detectPose();
+        }
+
+        function drawPose(pose) {
+            const keypoints = pose.keypoints;
+            
+            // 骨格を描画
+            ctx.strokeStyle = '#00ff00';
+            ctx.lineWidth = 2;
+            
+            // 主要な関節を描画
+            keypoints.forEach(keypoint => {
+                if (keypoint.score > 0.5) {
+                    const x = keypoint.x * (poseCanvas.width / webcamVideo.videoWidth);
+                    const y = keypoint.y * (poseCanvas.height / webcamVideo.videoHeight);
+                    
+                    ctx.fillStyle = '#ff0000';
+                    ctx.beginPath();
+                    ctx.arc(x, y, 3, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            });
+        }
+
+        function checkForActions(pose) {
+            const currentTime = Date.now();
+            if (currentTime - lastActionTime < ACTION_COOLDOWN) return;
+            
+            const keypoints = pose.keypoints;
+            const leftWrist = keypoints.find(kp => kp.name === 'left_wrist');
+            const rightWrist = keypoints.find(kp => kp.name === 'right_wrist');
+            const leftShoulder = keypoints.find(kp => kp.name === 'left_shoulder');
+            const rightShoulder = keypoints.find(kp => kp.name === 'right_shoulder');
+            const nose = keypoints.find(kp => kp.name === 'nose');
+            
+            // 両手を上げるアクション
+            if (leftWrist && rightWrist && leftShoulder && rightShoulder && nose) {
+                if (leftWrist.score > 0.5 && rightWrist.score > 0.5 && 
+                    leftShoulder.score > 0.5 && rightShoulder.score > 0.5 && nose.score > 0.5) {
+                    
+                    const leftHandUp = leftWrist.y < leftShoulder.y;
+                    const rightHandUp = rightWrist.y < rightShoulder.y;
+                    
+                    if (leftHandUp && rightHandUp) {
+                        // 両手を上げた！
+                        const centerX = (leftWrist.x + rightWrist.x) / 2;
+                        const centerY = Math.min(leftWrist.y, rightWrist.y);
+                        
+                        triggerActionVideo(centerX, centerY, 'hands_up');
+                        lastActionTime = currentTime;
+                    }
+                }
+            }
+            
+            // 手を振るアクション（右手）
+            if (rightWrist && rightShoulder && nose) {
+                if (rightWrist.score > 0.5 && rightShoulder.score > 0.5 && nose.score > 0.5) {
+                    const handUp = rightWrist.y < nose.y;
+                    const handRight = rightWrist.x > rightShoulder.x + 50;
+                    
+                    if (handUp && handRight) {
+                        triggerActionVideo(rightWrist.x, rightWrist.y, 'wave');
+                        lastActionTime = currentTime;
+                    }
+                }
+            }
+        }
+
+        function triggerActionVideo(x, y, actionType) {
+            // 画面座標に変換
+            const screenX = (x / webcamVideo.videoWidth) * window.innerWidth;
+            const screenY = (y / webcamVideo.videoHeight) * window.innerHeight;
+            
+            // アクション動画を作成
+            const actionVideo = document.createElement('video');
+            actionVideo.className = 'action-video';
+            actionVideo.loop = true;
+            actionVideo.muted = true;
+            actionVideo.autoplay = true;
+            actionVideo.playsInline = true;
+            
+            // アクションタイプに応じて動画を設定
+            if (actionType === 'hands_up') {
+                actionVideo.src = 'celebration.mp4'; // 祝福動画
+            } else if (actionType === 'wave') {
+                actionVideo.src = 'wave_effect.mp4'; // 手を振る効果動画
+            }
+            
+            // 位置を設定
+            actionVideo.style.left = Math.max(0, Math.min(screenX - 100, window.innerWidth - 200)) + 'px';
+            actionVideo.style.top = Math.max(0, Math.min(screenY - 75, window.innerHeight - 150)) + 'px';
+            
+            container.appendChild(actionVideo);
+            actionVideos.push(actionVideo);
+            
+            // 再生開始
+            actionVideo.play().catch(error => {
+                console.log('アクション動画の再生に失敗:', error);
+            });
+            
+            // 5秒後に削除
+            setTimeout(() => {
+                if (actionVideo.parentNode) {
+                    actionVideo.parentNode.removeChild(actionVideo);
+                }
+                const index = actionVideos.indexOf(actionVideo);
+                if (index > -1) {
+                    actionVideos.splice(index, 1);
+                }
+            }, 5000);
+            
+            console.log(`アクション検出: ${actionType} at (${screenX}, ${screenY})`);
+        }
+
+        function enterFullscreen() {
+            const element = document.documentElement;
+            if (element.requestFullscreen) {
+                element.requestFullscreen();
+            } else if (element.webkitRequestFullscreen) {
+                element.webkitRequestFullscreen();
+            } else if (element.msRequestFullscreen) {
+                element.msRequestFullscreen();
+            }
+        }
+
+        // フルスクリーン状態の変更を監視
+        document.addEventListener('fullscreenchange', () => {
+            isFullscreen = !!document.fullscreenElement;
+            if (isFullscreen) {
+                fullscreenHint.style.display = 'none';
+            }
+        });
+
+        document.addEventListener('webkitfullscreenchange', () => {
+            isFullscreen = !!document.webkitFullscreenElement;
+            if (isFullscreen) {
+                fullscreenHint.style.display = 'none';
+            }
+        });
+
+        // オーバーレイ動画の読み込み完了時
+        overlayVideo.addEventListener('loadeddata', () => {
+            console.log('オーバーレイ動画が読み込まれました');
+        });
+
+        // ページ終了時にリソースを解放
+        window.addEventListener('beforeunload', () => {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            if (webcamStream) {
+                webcamStream.getTracks().forEach(track => track.stop());
+            }
+        });
+    </script>
+</body>
+</html>
