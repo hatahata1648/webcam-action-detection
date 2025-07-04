@@ -1,0 +1,40 @@
+{
+  "name": "webcam-action-detection",
+  "version": "1.0.0",
+  "description": "ウェブカメラでアクションを検出してエフェクト動画を再生するWebアプリケーション",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx http-server -p 8000 -c-1",
+    "dev": "npx http-server -p 8000 -c-1 -o",
+    "build": "echo 'このプロジェクトは静的サイトです'",
+    "deploy": "gh-pages -d ."
+  },
+  "keywords": [
+    "webcam",
+    "action-detection",
+    "tensorflow",
+    "pose-estimation",
+    "video-effects",
+    "web-app"
+  ],
+  "author": "Your Name <your.email@example.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "http-server": "^14.1.1",
+    "gh-pages": "^6.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/webcam-action-detection.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/webcam-action-detection/issues"
+  },
+  "homepage": "https://github.com/yourusername/webcam-action-detection#readme",
+  "browserslist": [
+    "last 2 Chrome versions",
+    "last 2 Firefox versions",
+    "last 2 Safari versions",
+    "last 2 Edge versions"
+  ]
+}
